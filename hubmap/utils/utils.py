@@ -2,6 +2,7 @@ import numpy as np
 from os.path import join
 from natsort import natsorted
 import os
+import SimpleITK as sitk
 
 
 def load_filepaths(load_dir, extension=None, return_path=True, return_extension=True):
@@ -36,3 +37,26 @@ def load_filepaths(load_dir, extension=None, return_path=True, return_extension=
     filepaths = natsorted(filepaths)
 
     return filepaths
+
+
+def save_nifti(filename, image, spacing=None, affine=None, header=None, is_seg=False, dtype=None):
+    if is_seg:
+        image = np.rint(image)
+        if dtype is None:
+            image = image.astype(np.int16)  # In special cases segmentations can contain negative labels, so no np.uint8 by default
+
+    if dtype is not None:
+        image = image.astype(dtype)
+
+    image = sitk.GetImageFromArray(image)
+
+    if header is not None:
+        [image.SetMetaData(key, header[key]) for key in header.keys()]
+
+    if spacing is not None:
+        image.SetSpacing(spacing)
+
+    if affine is not None:
+        pass  # How do I set the affine transform with SimpleITK? With NiBabel it is just nib.Nifti1Image(img, affine=affine, header=header)
+
+    sitk.WriteImage(image, filename)

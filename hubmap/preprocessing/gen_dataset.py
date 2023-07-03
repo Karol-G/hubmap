@@ -5,7 +5,7 @@ from os.path import join
 from pathlib import Path
 import shutil
 from tqdm import tqdm
-from hubmap.utils.utils import load_filepaths
+from hubmap.utils.utils import load_filepaths, save_nifti
 import cv2
 from skimage.transform import resize
 from acvl_utils.cropping_and_padding.bounding_boxes import pad_bbox, bounding_box_to_slice
@@ -46,9 +46,9 @@ def generate_dataset(polygons_filepath, train_load_dir, save_dir, labels, ignore
             image = np.rint(image).astype(np.uint8)
         if zscore is not None:
             image = image.astype(np.float32)
-            image -= zscore["mean"]
-            image /= zscore["std"]
-        np.save(join(save_dir, "images", "{}_0000.npy".format(name)), image)
+            image = image - zscore["mean"]
+            image = image / zscore["std"]
+        save_nifti(join(save_dir, "images", "{}_0000.nii.gz".format(name)), image)
         
         semantic_seg = np.zeros(image.shape[:2], dtype=np.uint8)
         instance_seg = np.zeros(image.shape[:2], dtype=np.uint8)
@@ -66,11 +66,11 @@ def generate_dataset(polygons_filepath, train_load_dir, save_dir, labels, ignore
              new_class_annotation["coordinates"] = coordinates.tolist()
              instances[instance_label] = new_class_annotation
         
-        np.save(join(save_dir, "semantic_seg", "{}.npy".format(name)), semantic_seg)
-        np.save(join(save_dir, "instance_seg", "{}.npy".format(name)), instance_seg)
+        save_nifti(join(save_dir, "semantic_seg", "{}.nii.gz".format(name)), semantic_seg)
+        save_nifti(join(save_dir, "instance_seg", "{}.nii.gz".format(name)), instance_seg)
         semantic_seg[semantic_seg == labels["unsure"]] = ignore_label[labels["unsure"]]
         border_core = instance2border_core(instance_seg, border_thickness=border_thickness, border_label=border_label, semantic_seg=semantic_seg)
-        np.save(join(save_dir, "border_core", "{}.npy".format(name)), border_core)
+        save_nifti(join(save_dir, "border_core", "{}.nii.gz".format(name)), border_core)
         
         polygons[name] = instances
 
@@ -89,12 +89,12 @@ def generate_dataset(polygons_filepath, train_load_dir, save_dir, labels, ignore
                         image = image.astype(np.float32)
                         image -= zscore["mean"]
                         image /= zscore["std"]
-                np.save(join(save_dir, "images", "{}_0000.npy".format(name)), image)
+                save_nifti(join(save_dir, "images", "{}_0000.nii.gz".format(name)), image)
                 
                 seg = np.full(image.shape[:2], fill_value=labels["unsure"], dtype=np.uint8)
-                np.save(join(save_dir, "semantic_seg", "{}.npy".format(name)), seg)
-                np.save(join(save_dir, "instance_seg", "{}.npy".format(name)), seg)
-                np.save(join(save_dir, "border_core", "{}.npy".format(name)), seg)
+                save_nifti(join(save_dir, "semantic_seg", "{}.nii.gz".format(name)), seg)
+                save_nifti(join(save_dir, "instance_seg", "{}.nii.gz".format(name)), seg)
+                save_nifti(join(save_dir, "border_core", "{}.nii.gz".format(name)), seg)
                 polygons[name] = {1: {"label": labels["unsure"], "coordinates": None}}
 
     with open(join(save_dir, 'metadata.json'), 'w') as json_file:
