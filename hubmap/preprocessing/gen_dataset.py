@@ -48,7 +48,7 @@ def generate_dataset(polygons_filepath, train_load_dir, save_dir, labels, ignore
             image = image.astype(np.float32)
             image = image - zscore["mean"]
             image = image / zscore["std"]
-        save_nifti(join(save_dir, "images", "{}_0000.nii.gz".format(name)), image)
+        save_nifti(join(save_dir, "images", "{}_0000.nii.gz".format(name)), image.transpose(2, 0, 1), spacing=(1, 1, 999))
         
         semantic_seg = np.zeros(image.shape[:2], dtype=np.uint8)
         instance_seg = np.zeros(image.shape[:2], dtype=np.uint8)
@@ -89,7 +89,7 @@ def generate_dataset(polygons_filepath, train_load_dir, save_dir, labels, ignore
                         image = image.astype(np.float32)
                         image -= zscore["mean"]
                         image /= zscore["std"]
-                save_nifti(join(save_dir, "images", "{}_0000.nii.gz".format(name)), image)
+                save_nifti(join(save_dir, "images", "{}_0000.nii.gz".format(name)), image.transpose(2, 0, 1), spacing=(1, 1, 999))
                 
                 seg = np.full(image.shape[:2], fill_value=labels["unsure"], dtype=np.uint8)
                 save_nifti(join(save_dir, "semantic_seg", "{}.nii.gz".format(name)), seg)
