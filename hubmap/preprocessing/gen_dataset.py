@@ -2,7 +2,6 @@ import json
 import numpy as np
 import tifffile
 from os.path import join
-from PIL import Image
 from pathlib import Path
 import shutil
 from tqdm import tqdm
@@ -14,14 +13,21 @@ from skimage.measure import regionprops
 from skimage.morphology import disk
 from skimage.morphology import binary_erosion
 from acvl_utils.cropping_and_padding.bounding_boxes import regionprops_bbox_to_proper_bbox
+from hubmap.utils.normalizer import Zscore
 
 
-def generate_dataset(polygons_filepath, train_load_dir, save_dir, labels, ignore_label, border_label, include_unannotated=False, border_thickness=3, resize_factor=2):
-    shutil.rmtree(save_dir, ignore_errors=True)
+def generate_dataset(polygons_filepath, train_load_dir, save_dir, labels, ignore_label, border_label, include_unannotated=False, border_thickness=2, resize_factor=None, sample_percentage=None, zscore=None):
+    shutil.rmtree(join(save_dir, "images"), ignore_errors=True)
+    shutil.rmtree(join(save_dir, "semantic_seg"), ignore_errors=True)
+    shutil.rmtree(join(save_dir, "instance_seg"), ignore_errors=True)
+    shutil.rmtree(join(save_dir, "border_core"), ignore_errors=True)
     Path(join(save_dir, "images")).mkdir(parents=True, exist_ok=True)
     Path(join(save_dir, "semantic_seg")).mkdir(parents=True, exist_ok=True)
     Path(join(save_dir, "instance_seg")).mkdir(parents=True, exist_ok=True)
     Path(join(save_dir, "border_core")).mkdir(parents=True, exist_ok=True)
+    
+    if zscore is None:
+        normalizer = Zscore(sample_percentage=sample_percentage, channel_dim=-1, num_channels=3)
 
     # Process images with annotations
     polygons = {}
@@ -32,14 +38,17 @@ def generate_dataset(polygons_filepath, train_load_dir, save_dir, labels, ignore
         image_polygons = json.loads(json_str)
         name = image_polygons["id"]
         image = tifffile.imread(join(train_load_dir, "{}.tif".format(name)))
+        if zscore is None:
+            normalizer.sample(image)
 
-        if resize_factor is None:
-          shutil.copy(join(train_load_dir, "{}.tif".format(name)), join(save_dir, "images", "{}.tif".format(name)))
-        else:
+        if resize_factor is not None:
             image = resize(image.astype(np.float64), (image.shape[0]*resize_factor, image.shape[1]*resize_factor, 3), order=3, anti_aliasing=False, preserve_range=True)
             image = np.rint(image).astype(np.uint8)
-            image_pil = Image.fromarray(image)
-            image_pil.save(join(save_dir, "images", "{}.tif".format(name)))
+        if zscore is not None:
+            image = image.astype(np.float32)
+            image -= zscore["mean"]
+            image /= zscore["std"]
+        np.save(join(save_dir, "images", "{}_0000.npy".format(name)), image)
         
         semantic_seg = np.zeros(image.shape[:2], dtype=np.uint8)
         instance_seg = np.zeros(image.shape[:2], dtype=np.uint8)
@@ -49,22 +58,19 @@ def generate_dataset(polygons_filepath, train_load_dir, save_dir, labels, ignore
              new_class_annotation = {}
              new_class_annotation["label"] = labels[class_annotation["type"]]
              coordinates = np.asarray(class_annotation["coordinates"]).squeeze()
-             contour = coordinates.reshape((-1, 1, 2)) * resize_factor
+             contour = coordinates.reshape((-1, 1, 2))
+             if resize_factor is not None:
+                 contour *= resize_factor
              cv2.fillPoly(semantic_seg, [contour], color=new_class_annotation["label"])
              cv2.fillPoly(instance_seg, [contour], color=instance_label)
              new_class_annotation["coordinates"] = coordinates.tolist()
              instances[instance_label] = new_class_annotation
         
-        semantic_seg_pil = Image.fromarray(semantic_seg)
-        semantic_seg_pil.save(join(save_dir, "semantic_seg", "{}.tif".format(name)))
-
-        instance_seg_pil = Image.fromarray(instance_seg)
-        instance_seg_pil.save(join(save_dir, "instance_seg", "{}.tif".format(name)))
-
+        np.save(join(save_dir, "semantic_seg", "{}.npy".format(name)), semantic_seg)
+        np.save(join(save_dir, "instance_seg", "{}.npy".format(name)), instance_seg)
         semantic_seg[semantic_seg == labels["unsure"]] = ignore_label[labels["unsure"]]
         border_core = instance2border_core(instance_seg, border_thickness=border_thickness, border_label=border_label, semantic_seg=semantic_seg)
-        border_core_pil = Image.fromarray(border_core)
-        border_core_pil.save(join(save_dir, "border_core", "{}.tif".format(name)))
+        np.save(join(save_dir, "border_core", "{}.npy".format(name)), border_core)
         
         polygons[name] = instances
 
@@ -74,25 +80,31 @@ def generate_dataset(polygons_filepath, train_load_dir, save_dir, labels, ignore
 
         for name in tqdm(names):
             if name not in polygons:
-               image = tifffile.imread(join(train_load_dir, "{}.tif".format(name)))
+                image = tifffile.imread(join(train_load_dir, "{}.tif".format(name)))
 
-               if resize_factor is None:
-                    shutil.copy(join(train_load_dir, "{}.tif".format(name)), join(save_dir, "images", "{}.tif".format(name)))
-               else:
+                if resize_factor is not None:
                     image = resize(image.astype(np.float64), (image.shape[0]*resize_factor, image.shape[1]*resize_factor, 3), order=3, anti_aliasing=False, preserve_range=True)
                     image = np.rint(image).astype(np.uint8)
-                    image_pil = Image.fromarray(image)
-                    image_pil.save(join(save_dir, "images", "{}.tif".format(name)))
-
-               seg = np.full(image.shape[:2], fill_value=labels["unsure"], dtype=np.uint8)
-               seg = Image.fromarray(seg)
-               seg.save(join(save_dir, "semantic_seg", "{}.tif".format(name)))
-               seg.save(join(save_dir, "instance_seg", "{}.tif".format(name)))
-               seg.save(join(save_dir, "border_core", "{}.tif".format(name)))
-               polygons[name] = {1: {"label": labels["unsure"], "coordinates": None}}
+                if zscore is not None:
+                        image = image.astype(np.float32)
+                        image -= zscore["mean"]
+                        image /= zscore["std"]
+                np.save(join(save_dir, "images", "{}_0000.npy".format(name)), image)
+                
+                seg = np.full(image.shape[:2], fill_value=labels["unsure"], dtype=np.uint8)
+                np.save(join(save_dir, "semantic_seg", "{}.npy".format(name)), seg)
+                np.save(join(save_dir, "instance_seg", "{}.npy".format(name)), seg)
+                np.save(join(save_dir, "border_core", "{}.npy".format(name)), seg)
+                polygons[name] = {1: {"label": labels["unsure"], "coordinates": None}}
 
     with open(join(save_dir, 'metadata.json'), 'w') as json_file:
         json.dump(polygons, json_file)
+
+    if zscore is None:
+        zscore = normalizer.get_zscore()
+
+        with open(join(save_dir, 'zscore.json'), 'w') as json_file:
+            json.dump(zscore, json_file)
 
 
 def instance2border_core(instance_segmentation: np.ndarray,
@@ -121,11 +133,15 @@ def instance2border_core(instance_segmentation: np.ndarray,
 
 
 if __name__ == "__main__":
-     polygons_filepath = "/home/k539i/Documents/datasets/original/hubmap-hacking-the-human-vasculature/polygons.jsonl"
-     train_load_dir = "/home/k539i/Documents/datasets/original/hubmap-hacking-the-human-vasculature/train"
-     save_dir = "/home/k539i/Documents/datasets/original/hubmap-hacking-the-human-vasculature/preprocessed/train"
-     labels = {"background": 0, "blood_vessel": 1, "glomerulus": 2, "unsure": 3}
-     ignore_label = {3: 4}
-     border_label = 3
+    polygons_filepath = "/home/k539i/Documents/datasets/original/hubmap-hacking-the-human-vasculature/polygons.jsonl"
+    train_load_dir = "/home/k539i/Documents/datasets/original/hubmap-hacking-the-human-vasculature/train"
+    save_dir = "/home/k539i/Documents/datasets/original/hubmap-hacking-the-human-vasculature/preprocessed/train"
+    labels = {"background": 0, "blood_vessel": 1, "glomerulus": 2, "unsure": 3}
+    ignore_label = {3: 4}
+    border_label = 3
+    zscore = None
+     
+    with open(join(save_dir, "zscore.json"), 'r') as f:
+        zscore = json.load(f)
 
-     generate_dataset(polygons_filepath, train_load_dir, save_dir, labels, ignore_label, border_label)
+    generate_dataset(polygons_filepath, train_load_dir, save_dir, labels, ignore_label, border_label, zscore=zscore)

@@ -9,14 +9,11 @@ from skimage.morphology import disk
 from skimage.morphology import dilation
 from scipy.ndimage.morphology import distance_transform_edt
 from typing import Tuple, Optional, Type, Any
-import numpy_indexed as npi
 import json
-import numpy as np
 import tifffile
 from os.path import join
 from pathlib import Path
 import shutil
-from tqdm import tqdm
 from hubmap.utils.utils import load_filepaths
 from skimage.transform import resize
 from scipy.ndimage import binary_fill_holes
@@ -288,7 +285,7 @@ def compute_instance_classes(instance_seg, border_core, border_label, default_la
 
 if __name__ == "__main__":
     load_dir = "/home/k539i/Documents/datasets/original/hubmap-hacking-the-human-vasculature/predictions/border_core/"
-    save_dir = "/home/k539i/Documents/datasets/original/hubmap-hacking-the-human-vasculature/predictions/instance_seg"
+    save_dir = "/home/k539i/Documents/datasets/original/hubmap-hacking-the-human-vasculature/predictions/postprocessed/"
     core_labels = (1, 2)
     border_label = 3
     resize_factor = None
