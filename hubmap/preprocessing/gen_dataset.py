@@ -14,9 +14,10 @@ from skimage.morphology import disk
 from skimage.morphology import binary_erosion
 from acvl_utils.cropping_and_padding.bounding_boxes import regionprops_bbox_to_proper_bbox
 from hubmap.utils.normalizer import Zscore
+from acvl_utils.miscellaneous.ptqdm import ptqdm
 
 
-def generate_dataset(polygons_filepath, train_load_dir, save_dir, labels, ignore_label, border_label, include_unannotated=False, border_thickness=2, resize_factor=None, sample_percentage=None, zscore=None):
+def generate_dataset(polygons_filepath, train_load_dir, save_dir, labels, ignore_label, border_label, include_unannotated=False, border_thickness=5, resize_factor=2, sample_percentage=None, zscore=None, processes=12):
     shutil.rmtree(join(save_dir, "images"), ignore_errors=True)
     shutil.rmtree(join(save_dir, "semantic_seg"), ignore_errors=True)
     shutil.rmtree(join(save_dir, "instance_seg"), ignore_errors=True)
@@ -34,45 +35,54 @@ def generate_dataset(polygons_filepath, train_load_dir, save_dir, labels, ignore
     with open(polygons_filepath, 'r') as f:
          polygons_list = list(f)
 
-    for json_str in tqdm(polygons_list):
-        image_polygons = json.loads(json_str)
-        name = image_polygons["id"]
-        image = tifffile.imread(join(train_load_dir, "{}.tif".format(name)))
-        if zscore is None:
-            normalizer.sample(image)
+    if processes is None:
+        for json_str in tqdm(polygons_list):
+            image_polygons = json.loads(json_str)
+            name = image_polygons["id"]
+            image = tifffile.imread(join(train_load_dir, "{}.tif".format(name)))
+            if zscore is None:
+                normalizer.sample(image)
 
-        if resize_factor is not None:
-            image = resize(image.astype(np.float64), (image.shape[0]*resize_factor, image.shape[1]*resize_factor, 3), order=3, anti_aliasing=False, preserve_range=True)
-            image = np.rint(image).astype(np.uint8)
-        if zscore is not None:
-            image = image.astype(np.float32)
-            image = image - zscore["mean"]
-            image = image / zscore["std"]
-        save_nifti(join(save_dir, "images", "{}_0000.nii.gz".format(name)), image.transpose(2, 0, 1), spacing=(1, 1, 999))
+            if resize_factor is not None:
+                image = resize(image.astype(np.float64), (image.shape[0]*resize_factor, image.shape[1]*resize_factor, 3), order=3, anti_aliasing=False, preserve_range=True)
+                image = np.rint(image).astype(np.uint8)
+            if zscore is not None:
+                image = image.astype(np.float32)
+                image = image - zscore["mean"]
+                image = image / zscore["std"]
+            save_nifti(join(save_dir, "images", "{}_0000.nii.gz".format(name)), image[..., 0], spacing=(1, 1))
+            save_nifti(join(save_dir, "images", "{}_0001.nii.gz".format(name)), image[..., 1], spacing=(1, 1))
+            save_nifti(join(save_dir, "images", "{}_0002.nii.gz".format(name)), image[..., 2], spacing=(1, 1))
+            
+            semantic_seg = np.zeros(image.shape[:2], dtype=np.uint8)
+            instance_seg = np.zeros(image.shape[:2], dtype=np.uint8)
+            instances = {}
+            for instance_label, class_annotation in enumerate(image_polygons["annotations"]):
+                instance_label += 1
+                new_class_annotation = {}
+                new_class_annotation["label"] = labels[class_annotation["type"]]
+                coordinates = np.asarray(class_annotation["coordinates"]).squeeze()
+                contour = coordinates.reshape((-1, 1, 2))
+                if resize_factor is not None:
+                    contour *= resize_factor
+                cv2.fillPoly(semantic_seg, [contour], color=new_class_annotation["label"])
+                cv2.fillPoly(instance_seg, [contour], color=instance_label)
+                new_class_annotation["coordinates"] = coordinates.tolist()
+                instances[instance_label] = new_class_annotation
+            
+            save_nifti(join(save_dir, "semantic_seg", "{}.nii.gz".format(name)), semantic_seg)
+            save_nifti(join(save_dir, "instance_seg", "{}.nii.gz".format(name)), instance_seg)
+            semantic_seg[semantic_seg == labels["unsure"]] = ignore_label[labels["unsure"]]
+            border_core = instance2border_core(instance_seg, border_thickness=border_thickness)  # , border_label=border_label, semantic_seg=semantic_seg)
+            save_nifti(join(save_dir, "border_core", "{}.nii.gz".format(name)), border_core)
+            
+            polygons[name] = instances
+    else:
+        results = ptqdm(process_image, polygons_list, processes, train_load_dir=train_load_dir, save_dir=save_dir, labels=labels, 
+                ignore_label=ignore_label, border_label=border_label, border_thickness=border_thickness, resize_factor=resize_factor, zscore=zscore)
         
-        semantic_seg = np.zeros(image.shape[:2], dtype=np.uint8)
-        instance_seg = np.zeros(image.shape[:2], dtype=np.uint8)
-        instances = {}
-        for instance_label, class_annotation in enumerate(image_polygons["annotations"]):
-             instance_label += 1
-             new_class_annotation = {}
-             new_class_annotation["label"] = labels[class_annotation["type"]]
-             coordinates = np.asarray(class_annotation["coordinates"]).squeeze()
-             contour = coordinates.reshape((-1, 1, 2))
-             if resize_factor is not None:
-                 contour *= resize_factor
-             cv2.fillPoly(semantic_seg, [contour], color=new_class_annotation["label"])
-             cv2.fillPoly(instance_seg, [contour], color=instance_label)
-             new_class_annotation["coordinates"] = coordinates.tolist()
-             instances[instance_label] = new_class_annotation
-        
-        save_nifti(join(save_dir, "semantic_seg", "{}.nii.gz".format(name)), semantic_seg)
-        save_nifti(join(save_dir, "instance_seg", "{}.nii.gz".format(name)), instance_seg)
-        semantic_seg[semantic_seg == labels["unsure"]] = ignore_label[labels["unsure"]]
-        border_core = instance2border_core(instance_seg, border_thickness=border_thickness, border_label=border_label, semantic_seg=semantic_seg)
-        save_nifti(join(save_dir, "border_core", "{}.nii.gz".format(name)), border_core)
-        
-        polygons[name] = instances
+        for name, instances in results:
+            polygons[name] = instances
 
     if include_unannotated:
         # Process images without annotations
@@ -89,7 +99,9 @@ def generate_dataset(polygons_filepath, train_load_dir, save_dir, labels, ignore
                         image = image.astype(np.float32)
                         image -= zscore["mean"]
                         image /= zscore["std"]
-                save_nifti(join(save_dir, "images", "{}_0000.nii.gz".format(name)), image.transpose(2, 0, 1), spacing=(1, 1, 999))
+                save_nifti(join(save_dir, "images", "{}_0000.nii.gz".format(name)), image[..., 0], spacing=(1, 1))
+                save_nifti(join(save_dir, "images", "{}_0001.nii.gz".format(name)), image[..., 1], spacing=(1, 1))
+                save_nifti(join(save_dir, "images", "{}_0002.nii.gz".format(name)), image[..., 2], spacing=(1, 1))
                 
                 seg = np.full(image.shape[:2], fill_value=labels["unsure"], dtype=np.uint8)
                 save_nifti(join(save_dir, "semantic_seg", "{}.nii.gz".format(name)), seg)
@@ -105,6 +117,46 @@ def generate_dataset(polygons_filepath, train_load_dir, save_dir, labels, ignore
 
         with open(join(save_dir, 'zscore.json'), 'w') as json_file:
             json.dump(zscore, json_file)
+
+
+def process_image(json_str, train_load_dir, save_dir, labels, ignore_label, border_label, border_thickness, resize_factor, zscore):
+    image_polygons = json.loads(json_str)
+    name = image_polygons["id"]
+    image = tifffile.imread(join(train_load_dir, "{}.tif".format(name)))
+
+    if resize_factor is not None:
+        image = resize(image.astype(np.float64), (image.shape[0]*resize_factor, image.shape[1]*resize_factor, 3), order=3, anti_aliasing=False, preserve_range=True)
+        image = np.rint(image).astype(np.uint8)
+    if zscore is not None:
+        image = image.astype(np.float32)
+        image = image - zscore["mean"]
+        image = image / zscore["std"]
+    save_nifti(join(save_dir, "images", "{}_0000.nii.gz".format(name)), image[..., 0], spacing=(1, 1))
+    save_nifti(join(save_dir, "images", "{}_0001.nii.gz".format(name)), image[..., 1], spacing=(1, 1))
+    save_nifti(join(save_dir, "images", "{}_0002.nii.gz".format(name)), image[..., 2], spacing=(1, 1))
+    
+    semantic_seg = np.zeros(image.shape[:2], dtype=np.uint8)
+    instance_seg = np.zeros(image.shape[:2], dtype=np.uint8)
+    instances = {}
+    for instance_label, class_annotation in enumerate(image_polygons["annotations"]):
+            instance_label += 1
+            new_class_annotation = {}
+            new_class_annotation["label"] = labels[class_annotation["type"]]
+            coordinates = np.asarray(class_annotation["coordinates"]).squeeze()
+            contour = coordinates.reshape((-1, 1, 2))
+            if resize_factor is not None:
+                contour *= resize_factor
+            cv2.fillPoly(semantic_seg, [contour], color=new_class_annotation["label"])
+            cv2.fillPoly(instance_seg, [contour], color=instance_label)
+            new_class_annotation["coordinates"] = coordinates.tolist()
+            instances[instance_label] = new_class_annotation
+    
+    save_nifti(join(save_dir, "semantic_seg", "{}.nii.gz".format(name)), semantic_seg)
+    save_nifti(join(save_dir, "instance_seg", "{}.nii.gz".format(name)), instance_seg)
+    semantic_seg[semantic_seg == labels["unsure"]] = ignore_label[labels["unsure"]]
+    border_core = instance2border_core(instance_seg, border_thickness=border_thickness)  # , border_label=border_label, semantic_seg=semantic_seg)
+    save_nifti(join(save_dir, "border_core", "{}.nii.gz".format(name)), border_core)
+    return name, instances
 
 
 def instance2border_core(instance_segmentation: np.ndarray,

@@ -60,3 +60,21 @@ def save_nifti(filename, image, spacing=None, affine=None, header=None, is_seg=F
         pass  # How do I set the affine transform with SimpleITK? With NiBabel it is just nib.Nifti1Image(img, affine=affine, header=header)
 
     sitk.WriteImage(image, filename)
+
+
+def load_nifti(filename, return_meta=False, is_seg=False):
+    image = sitk.ReadImage(filename)
+    image_np = sitk.GetArrayFromImage(image)
+
+    if is_seg:
+        image_np = np.rint(image_np)
+        # image_np = image_np.astype(np.int16)  # In special cases segmentations can contain negative labels, so no np.uint8
+
+    if not return_meta:
+        return image_np
+    else:
+        spacing = image.GetSpacing()
+        keys = image.GetMetaDataKeys()
+        header = {key:image.GetMetaData(key) for key in keys}
+        affine = None  # How do I get the affine transform with SimpleITK? With NiBabel it is just image.affine
+        return image_np, spacing, affine, header
