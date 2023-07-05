@@ -17,7 +17,7 @@ from hubmap.utils.normalizer import Zscore
 from acvl_utils.miscellaneous.ptqdm import ptqdm
 
 
-def generate_dataset(polygons_filepath, train_load_dir, save_dir, labels, ignore_label, border_label, include_unannotated=False, border_thickness=5, resize_factor=2, sample_percentage=None, zscore=None, processes=12):
+def generate_dataset(polygons_filepath, train_load_dir, save_dir, labels, ignore_label, border_label, include_unannotated=False, border_thickness=7, resize_factor=3, sample_percentage=None, zscore=None, processes=12):
     shutil.rmtree(join(save_dir, "images"), ignore_errors=True)
     shutil.rmtree(join(save_dir, "semantic_seg"), ignore_errors=True)
     shutil.rmtree(join(save_dir, "instance_seg"), ignore_errors=True)
@@ -73,7 +73,7 @@ def generate_dataset(polygons_filepath, train_load_dir, save_dir, labels, ignore
             save_nifti(join(save_dir, "semantic_seg", "{}.nii.gz".format(name)), semantic_seg)
             save_nifti(join(save_dir, "instance_seg", "{}.nii.gz".format(name)), instance_seg)
             semantic_seg[semantic_seg == labels["unsure"]] = ignore_label[labels["unsure"]]
-            border_core = instance2border_core(instance_seg, border_thickness=border_thickness)  # , border_label=border_label, semantic_seg=semantic_seg)
+            border_core = instance2border_core(instance_seg, border_thickness=border_thickness, border_label=border_label, semantic_seg=semantic_seg)
             save_nifti(join(save_dir, "border_core", "{}.nii.gz".format(name)), border_core)
             
             polygons[name] = instances
@@ -154,7 +154,7 @@ def process_image(json_str, train_load_dir, save_dir, labels, ignore_label, bord
     save_nifti(join(save_dir, "semantic_seg", "{}.nii.gz".format(name)), semantic_seg)
     save_nifti(join(save_dir, "instance_seg", "{}.nii.gz".format(name)), instance_seg)
     semantic_seg[semantic_seg == labels["unsure"]] = ignore_label[labels["unsure"]]
-    border_core = instance2border_core(instance_seg, border_thickness=border_thickness)  # , border_label=border_label, semantic_seg=semantic_seg)
+    border_core = instance2border_core(instance_seg, border_thickness=border_thickness, border_label=border_label, semantic_seg=semantic_seg)
     save_nifti(join(save_dir, "border_core", "{}.nii.gz".format(name)), border_core)
     return name, instances
 
